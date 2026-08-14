@@ -13,12 +13,13 @@
 
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
 # 将 crewai 的运行数据目录（任务输出数据库等）重定向到项目内 .appdata/，
-# 避免写入系统 AppData\Local\CrewAI（沙箱/权限受限环境下无法写入）。
+# 避免写入系统 AppData\Local\CrewAI 与 ~/.config/crewai（沙箱/权限受限环境下无法写入）。
 # 注意：必须在首次 import crewai 之前完成 patch（下游模块会 from ... import 该函数）。
 import crewai_core.paths as _crewai_paths
 
@@ -26,6 +27,7 @@ _RUN_DATA_DIR = str(BASE_DIR / ".appdata")
 _crewai_paths.db_storage_path = lambda: _RUN_DATA_DIR
 os.environ["APPDATA"] = _RUN_DATA_DIR
 os.environ["LOCALAPPDATA"] = _RUN_DATA_DIR
+os.environ["USERPROFILE"] = _RUN_DATA_DIR
 
 from dotenv import load_dotenv
 
@@ -107,7 +109,7 @@ def main() -> None:
 
     split_review_output()
 
-    stamp = result.timestamp.strftime("%Y%m%d_%H%M%S") if result.timestamp else ""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_validation_gate(stamp)
 
     print("\n========== Crew 运行结束 ==========")
