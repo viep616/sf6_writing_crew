@@ -32,6 +32,15 @@ from crewai.project.crew_loader import load_crew
 def main() -> None:
     crew, default_inputs = load_crew(BASE_DIR / "crew.jsonc")
     result = crew.kickoff(inputs=default_inputs)
+
+    # 自动留档：将固定名的最新报告复制为带时间戳的版本，避免下次运行覆盖
+    report = BASE_DIR / "output" / "论证报告.md"
+    if report.is_file():
+        stamp = result.timestamp.strftime("%Y%m%d_%H%M%S") if result.timestamp else ""
+        archive = BASE_DIR / "output" / f"论证报告_{stamp}.md"
+        archive.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"[留档] {archive.name}")
+
     print("\n========== Crew 运行结束 ==========")
     print(result)
 
