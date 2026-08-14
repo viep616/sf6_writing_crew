@@ -3,11 +3,16 @@
 绕过 crewai CLI 的 uv 环境管理与交互式 TUI，
 复用项目根目录（挑战杯/.venv）已装好的 crewai 环境直接运行 crew.jsonc。
 
+流程：crew 运行 → 拆分评审 Agent 的两段式输出（论文终稿 + 审稿意见）
+     → 数值防幻觉校验（tools/validate_report.py）
+     → 时间戳留档（未通过校验的文件名加「_未通过校验」后缀）
+
 用法（在本项目目录下）：
     & "..\\.venv\\Scripts\\python.exe" run.py
 """
 
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,18 +33,82 @@ load_dotenv(BASE_DIR / ".env", override=True)
 
 from crewai.project.crew_loader import load_crew
 
+sys.path.insert(0, str(BASE_DIR / "tools"))
+import validate_report  # noqa: E402
+
+REVIEW_SPLIT = "=== 审稿意见 ==="
+
+
+def split_review_output() -> bool:
+    """把评审任务输出（两段式）拆分为 论文_终稿.md 与 论文_审稿意见.md。
+
+    返回终稿文件是否存在。
+    """
+    final = BASE_DIR / "output" / "论文_终稿.md"
+    if not final.is_file():
+        return False
+    text = final.read_text(encoding="utf-8")
+    if REVIEW_SPLIT in text:
+        paper, notes = text.split(REVIEW_SPLIT, 1)
+        # 去掉终稿段开头可能残留的「=== 论文终稿 ===」标记与首尾空白
+        for marker in ("=== 论文终稿 ===", "===论文终稿==="):
+            paper = paper.replace(marker, "")
+        paper = paper.strip() + "\n"
+        notes = notes.strip() + "\n"
+        final.write_text(paper, encoding="utf-8")
+        (BASE_DIR / "output" / "论文_审稿意见.md").write_text(notes, encoding="utf-8")
+        print(f"[拆分] 论文_终稿.md（{len(paper)} 字符）+ 论文_审稿意见.md（{len(notes)} 字符）")
+    else:
+        print("[警告] 评审输出未包含分隔符，论文_终稿.md 保留原样（无审稿意见文件）")
+    return True
+
+
+def run_validation_gate(stamp: str) -> None:
+    """对论文终稿执行数值校验，并按结果决定留档文件名后缀。"""
+    report = BASE_DIR / "output" / "论文_终稿.md"
+    data = BASE_DIR / "data" / "qe_results.md"
+    if not report.is_file():
+        return
+    ok, problems = validate_report.validate(report, data)
+
+    suffix = "" if ok else "_未通过校验"
+    archive = BASE_DIR / "output" / f"论文_终稿_{stamp}{suffix}.md"
+    archive.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+
+    # 初稿留档（无需校验，初稿仅作对比用）
+    draft = BASE_DIR / "output" / "论文_初稿.md"
+    if draft.is_file():
+        draft_archive = BASE_DIR / "output" / f"论文_初稿_{stamp}.md"
+        draft_archive.write_text(draft.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"[留档] {draft_archive.name}")
+
+    if ok:
+        print(f"[留档] {archive.name}")
+        print("[校验] 通过：终稿所有数值均命中白名单或可推导。")
+    else:
+        problem_file = BASE_DIR / "output" / "校验问题.txt"
+        lines = [
+            f"运行时间戳：{stamp}",
+            f"发现 {len(problems)} 个白名单外数值（数据文件中不存在且无法推导）：",
+            "",
+            *problems,
+            "",
+            "处理建议：核对上述数值来源；若确为合理推导，请在 data/derived_formulas.md 声明公式；",
+            "若为模型编造，请人工修订终稿后重新校验。",
+        ]
+        problem_file.write_text("\n".join(lines), encoding="utf-8")
+        print(f"[留档] {archive.name}（带「未通过校验」标记）")
+        print(f"[校验] 未通过！问题清单见 {problem_file}")
+
 
 def main() -> None:
     crew, default_inputs = load_crew(BASE_DIR / "crew.jsonc")
     result = crew.kickoff(inputs=default_inputs)
 
-    # 自动留档：将固定名的最新报告复制为带时间戳的版本，避免下次运行覆盖
-    report = BASE_DIR / "output" / "论证报告.md"
-    if report.is_file():
-        stamp = result.timestamp.strftime("%Y%m%d_%H%M%S") if result.timestamp else ""
-        archive = BASE_DIR / "output" / f"论证报告_{stamp}.md"
-        archive.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
-        print(f"[留档] {archive.name}")
+    split_review_output()
+
+    stamp = result.timestamp.strftime("%Y%m%d_%H%M%S") if result.timestamp else ""
+    run_validation_gate(stamp)
 
     print("\n========== Crew 运行结束 ==========")
     print(result)
