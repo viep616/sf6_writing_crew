@@ -18,20 +18,20 @@ data/qe_results.md（队友填写的仿真摘要）
  [tech_writer]       科技写作员     → output/论证报告.md
 ```
 
-三个 Agent 均使用通义千问 qwen-plus（OpenAI 兼容模式）。
+三个 Agent 均使用通义千问 qwen-plus（crewai 原生 dashscope provider，国内站端点）。
 
 ## 快速开始
 
 ```powershell
 # 1. 配置密钥（首次）
 Copy-Item .env.example .env
-# 编辑 .env，填入千问 API Key
+# 编辑 .env，填入千问 API Key（DASHSCOPE_API_KEY）
 
 # 2. 填写仿真数据
 #    编辑 data/qe_results.md，按模板填入 QE 结果（留空的项 Agent 会跳过）
 
-# 3. 运行（在项目根目录的 .venv 环境下）
-crewai run
+# 3. 运行（在本项目目录下，复用上级目录的 .venv 环境）
+& "..\.venv\Scripts\python.exe" run.py
 ```
 
 运行结束后查看 `output/论证报告.md`。
