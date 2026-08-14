@@ -1,0 +1,22 @@
+# 敏感信息
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# CrewAI 运行产物
+output/
+logs/
+*.db
+memory/
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
