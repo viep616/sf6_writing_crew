@@ -46,6 +46,16 @@ SUPERSCRIPT_MAP = str.maketrans("⁻⁺⁰¹²³⁴⁵⁶⁷⁸⁹", "-+01234567
 TOLERANCE = 0.005  # 绝对容差：数据表两位小数，报告四舍五入不应超过此值
 
 
+def _sig2(x: float) -> float:
+    """取两位有效数字（数据文件队友备注要求'所有数值保留两位有效数字引用'，
+    故报告把推导值 1.54 写作 1.5、0.185 写作 0.18 属于合规表述，不应误报）。"""
+    if x == 0:
+        return 0.0
+    from math import floor, log10
+    d = floor(log10(abs(x)))
+    return round(x, -(d - 1))
+
+
 def _parse_cell_numbers(cell: str) -> list[float]:
     """从表格单元格提取全部数值；'未计算'/'—' 等返回空。"""
     if not cell:
@@ -115,7 +125,12 @@ def extract_report_numbers(report_text: str) -> list[tuple[str, float, int, str]
     results = []
     for lineno, line in enumerate(report_text.splitlines(), start=1):
         for m in NUM_UNIT_RE.finditer(line):
-            num_str = m.group(1).replace("−", "-").replace("–", "-").replace(" ", "")
+            # 区间伪影：'1.8–2.2 Å' 中 en-dash 会被捕获为负号 → '−2.2'。
+            # 若负号字符是 –/- 且其前一个字符是数字，视为区间上界，跳过。
+            num_part = m.group(1)
+            if num_part[:1] in ("−", "-", "–") and m.start() > 0 and line[m.start() - 1].isdigit():
+                continue
+            num_str = num_part.replace("−", "-").replace("–", "-").replace(" ", "")
             # 处理 ×10^n / e±n 后缀
             base = num_str
             multiplier = 1.0
@@ -145,10 +160,13 @@ def _check_derivable(val: float, unit_vals: set[float]) -> bool:
     # 直接命中
     if any(close(val, v) for v in vals):
         return True
-    # 差值 / 和（任意两值，含正负号两种方向）
+    # 差值 / 和（任意两值，含正负号两种方向）；两位有效数字表述视为同一值
     for a in vals:
         for b in vals:
-            if close(val, a - b) or close(val, abs(a - b)):
+            diff = a - b
+            if close(val, diff) or close(val, abs(diff)):
+                return True
+            if abs(diff) >= 0.1 and (_sig2(val) == _sig2(diff) or _sig2(val) == _sig2(abs(diff))):
                 return True
     # 注：不做"整数倍"推导——任意两位小数总能凑成某小值的整倍（如 2.99=23×0.13），
     # 该规则会被绕过白名单的数值利用；倍数表述（"约 N 倍"）通常不带单位，本就不在提取范围

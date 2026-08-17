@@ -21,6 +21,7 @@
 """
 
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -88,6 +89,21 @@ def split_review_output() -> None:
         print("[警告] 评审输出未包含分隔符，论文_终稿.md 保留原样")
 
 
+def strip_wrapping_fences() -> None:
+    """剥离「整篇被 markdown 围栏包裹」的输出格式问题（确定性代码，不依赖模型自觉）。
+
+    只处理首尾恰好是一对围栏的情况：贪婪匹配使内部偶发代码块得以保留。
+    """
+    final = OUTPUT_DIR / "论文_终稿.md"
+    if not final.is_file():
+        return
+    text = final.read_text(encoding="utf-8")
+    m = re.match(r"^```[\w-]*[ \t]*\n(.*)\n?```\s*$", text.strip(), re.DOTALL)
+    if m:
+        final.write_text(m.group(1).strip() + "\n", encoding="utf-8")
+        print("[清洗] 已剥离终稿外层 markdown 围栏")
+
+
 def parse_verdicts() -> int:
     """解析裁决书 JSON，返回成立裁决数。解析失败按 0 处理并留原始文件供人工审。"""
     if not VERDICT_FILE.is_file():
@@ -130,6 +146,7 @@ class PaperFlow(Flow[PaperState]):
         crew, inputs = load_crew(BASE_DIR / "crew.jsonc")
         crew.kickoff(inputs=inputs)
         split_review_output()
+        strip_wrapping_fences()
 
     # ---------- 对抗评审（固定两轮） ----------
     def _run_adversarial(self) -> int:
@@ -156,6 +173,7 @@ class PaperFlow(Flow[PaperState]):
     def revise_paper(self):
         crew, inputs = load_crew(BASE_DIR / "revise_crew.jsonc")
         crew.kickoff(inputs=inputs)
+        strip_wrapping_fences()
         print("[修订] 已按裁决完成最小修订")
 
     @listen(revise_paper)

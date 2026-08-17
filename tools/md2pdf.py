@@ -115,9 +115,9 @@ def md_to_pdf(md_path: Path, pdf_path: Path | None = None) -> bool:
         env = dict(os.environ)
         env.update(REAL_USER_ENV)  # 恢复真实用户目录，MiKTeX 依赖其定位配置
         r = subprocess.run(cmd, cwd=md_path.parent, env=env, capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=300)
+                           text=True, encoding="utf-8", errors="replace", timeout=600)
     except subprocess.TimeoutExpired:
-        print("[PDF] xelatex 编译超时（>300s）")
+        print("[PDF] xelatex 编译超时（>600s）")
         tmp_md.unlink(missing_ok=True)
         return False
     finally:
