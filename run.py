@@ -122,7 +122,7 @@ def main() -> None:
     split_review_output()
 
     # 图表生成 + 程序化插图（图与图注均由数据文件确定性生成，不经 LLM）
-    figures = make_charts.generate(BASE_DIR / "data" / "qe_results.md",
+    figures = make_charts.generate(BASE_DIR / "data" / "vasp_results.md",
                                    BASE_DIR / "output" / "figures")
     final_md = BASE_DIR / "output" / "论文_终稿.md"
     if figures and final_md.is_file():

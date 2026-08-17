@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_DATA = BASE_DIR / "data" / "qe_results.md"
+DEFAULT_DATA = BASE_DIR / "data" / "vasp_results.md"
 DEFAULT_OUT = BASE_DIR / "output" / "figures"
 
 # 中文字体（SimHei 无 Unicode 下标字形，气体式用 mathtext 渲染下标）

@@ -18,7 +18,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_REPORT = BASE_DIR / "output" / "论文_终稿.md"
-DEFAULT_DATA = BASE_DIR / "data" / "qe_results.md"
+DEFAULT_DATA = BASE_DIR / "data" / "vasp_results.md"
 
 # 物理单位 -> 归一化类别
 UNIT_ALIASES = {
