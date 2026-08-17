@@ -4,14 +4,18 @@
 复用项目根目录（挑战杯/.venv）已装好的 crewai 环境直接运行 crew.jsonc。
 
 流程：crew 运行 → 拆分评审 Agent 的两段式输出（论文终稿 + 审稿意见）
-     → 数值防幻觉校验（tools/validate_report.py）
-     → 时间戳留档（未通过校验的文件名加「_未通过校验」后缀）
+     → 图表生成（tools/make_charts.py，数据驱动不经 LLM）
+     → 程序化插图（tools/md2pdf.py，图与图注均来自数据文件）
+     → 数值防幻觉校验（tools/validate_report.py，覆盖含图注的终稿全文）
+     → 转 PDF（pandoc + xelatex）
+     → 时间戳留档（未通过校验的文件名加「_未通过校验」后缀，md 与 PDF 同名成对）
 
 用法（在本项目目录下）：
     & "..\\.venv\\Scripts\\python.exe" run.py
 """
 
 import os
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +29,9 @@ import crewai_core.paths as _crewai_paths
 
 _RUN_DATA_DIR = str(BASE_DIR / ".appdata")
 _crewai_paths.db_storage_path = lambda: _RUN_DATA_DIR
+# 保存真实用户目录：MiKTeX（xelatex）依赖它们定位用户级配置/格式缓存，
+# 子进程调 pandoc 时需恢复，否则 MiKTeX 回退写 C:\ProgramData（沙箱禁止）
+_REAL_USER_ENV = {k: os.environ[k] for k in ("APPDATA", "LOCALAPPDATA", "USERPROFILE") if k in os.environ}
 os.environ["APPDATA"] = _RUN_DATA_DIR
 os.environ["LOCALAPPDATA"] = _RUN_DATA_DIR
 os.environ["USERPROFILE"] = _RUN_DATA_DIR
@@ -36,7 +43,11 @@ load_dotenv(BASE_DIR / ".env", override=True)
 from crewai.project.crew_loader import load_crew
 
 sys.path.insert(0, str(BASE_DIR / "tools"))
+import make_charts  # noqa: E402
+import md2pdf  # noqa: E402
 import validate_report  # noqa: E402
+
+md2pdf.REAL_USER_ENV.update(_REAL_USER_ENV)
 
 REVIEW_SPLIT = "=== 审稿意见 ==="
 
@@ -65,12 +76,12 @@ def split_review_output() -> bool:
     return True
 
 
-def run_validation_gate(stamp: str) -> None:
-    """对论文终稿执行数值校验，并按结果决定留档文件名后缀。"""
+def run_validation_gate(stamp: str) -> str:
+    """对论文终稿执行数值校验，并按结果决定留档文件名后缀。返回后缀字符串。"""
     report = BASE_DIR / "output" / "论文_终稿.md"
     data = BASE_DIR / "data" / "qe_results.md"
     if not report.is_file():
-        return
+        return ""
     ok, problems = validate_report.validate(report, data)
 
     suffix = "" if ok else "_未通过校验"
@@ -101,6 +112,7 @@ def run_validation_gate(stamp: str) -> None:
         problem_file.write_text("\n".join(lines), encoding="utf-8")
         print(f"[留档] {archive.name}（带「未通过校验」标记）")
         print(f"[校验] 未通过！问题清单见 {problem_file}")
+    return suffix
 
 
 def main() -> None:
@@ -109,8 +121,22 @@ def main() -> None:
 
     split_review_output()
 
+    # 图表生成 + 程序化插图（图与图注均由数据文件确定性生成，不经 LLM）
+    figures = make_charts.generate(BASE_DIR / "data" / "qe_results.md",
+                                   BASE_DIR / "output" / "figures")
+    final_md = BASE_DIR / "output" / "论文_终稿.md"
+    if figures and final_md.is_file():
+        md2pdf.insert_figures(final_md, figures)
+
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_validation_gate(stamp)
+    suffix = run_validation_gate(stamp)
+
+    # 转 PDF：留档版（与 md 留档同名成对）+ 最新版（论文_终稿.pdf）
+    if final_md.is_file():
+        archived_pdf = BASE_DIR / "output" / f"论文_终稿_{stamp}{suffix}.pdf"
+        if md2pdf.md_to_pdf(final_md, archived_pdf):
+            shutil.copyfile(archived_pdf, BASE_DIR / "output" / "论文_终稿.pdf")
+            print(f"[留档] {archived_pdf.name}")
 
     print("\n========== Crew 运行结束 ==========")
     print(result)
