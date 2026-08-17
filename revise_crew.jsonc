@@ -1,0 +1,16 @@
+{
+  "name": "按裁决修订 Crew",
+  "agents": ["tech_writer"],
+  "tasks": [
+    {
+      "name": "revise_report",
+      "description": "使用 FileReadTool 读取 output/论文_终稿.md（当前稿件）与 output/对抗_裁决书.json（对抗评审裁决）。裁决书中每条'结论'为'成立'的条目含有'修改指令'（位置/操作/内容）。对稿件执行修订：\n1) 只执行成立项的修改指令，逐条落实（删除/改写/补充声明）；\n2) 最小改动原则：不重写未被判处的段落，不调整论文结构，不新增任何数据或数值；\n3) 修改指令中的'内容'若含数据文件之外的数值，忽略该数值只保留定性表述；\n4) 保持论文六部分结构完整、单位与化学式下标规范；\n5) 输出修订后的完整论文全文（从标题到结论），不得输出任何修改说明或批注——你的输出将直接作为论文终稿文件。",
+      "expected_output": "修订后的完整论文全文（Markdown，六部分齐全，无批注无说明），直接可作终稿。",
+      "agent": "tech_writer",
+      "output_file": "output/论文_终稿.md",
+      "markdown": true
+    }
+  ],
+  "process": "sequential",
+  "verbose": false
+}
