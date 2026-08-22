@@ -1,13 +1,17 @@
-"""报告数值防幻觉校验器（防线一）。
+"""报告防幻觉校验器（防线一）。
 
 流程：
-1. 解析 data/qe_results.md 表格，构建数值白名单（物理量, 数值, 单位）；
-2. 正则提取报告中所有「数值 + 物理单位」组合；
-3. 三分类：白名单命中 / 可推导（差值/和/倍数） / 白名单外 → 报警。
+1. 论文结构完整性检查：必须含标题 + 摘要/引言/计算方法/结果与讨论/结论，
+   防「模型输出了分析文本而非论文」的假绿（DeepSeek 实测踩坑）；
+2. 禁用表述黑名单：经验阈值 / 检测限(ppm/ppb) / 不确定度(±) / 数量级等
+   无据外推表述（千问与 DeepSeek 历次验收反复踩的雷，确定性拦截）；
+3. 解析数据文件表格，构建数值白名单（物理量, 数值, 单位）；
+4. 正则提取报告中所有「数值 + 物理单位」组合；
+5. 三分类：白名单命中 / 可推导（差值/和/倍数） / 白名单外 → 报警。
 
 用法（在项目根目录）：
     python tools/validate_report.py [报告路径] [数据文件路径]
-不带参数时用默认路径，返回 exit code：0=通过，1=存在白名单外数值。
+不带参数时用默认路径，返回 exit code：0=通过，1=存在校验问题。
 """
 
 from __future__ import annotations
@@ -173,12 +177,66 @@ def _check_derivable(val: float, unit_vals: set[float]) -> bool:
     return False
 
 
+# 论文结构完整性要求：缺任一即视为废稿（防止"输出的是分析而非论文"）。
+# 注意：必须带 re.MULTILINE，否则 ^ 只匹配全文开头，正常论文会被误报缺节。
+REQUIRED_SECTIONS: list[tuple[str, re.Pattern[str]]] = [
+    ("摘要", re.compile(r"^#{1,6}\s*[0-9.]*\s*摘要", re.MULTILINE)),
+    ("引言", re.compile(r"^#{1,6}\s*[0-9.]*\s*引言", re.MULTILINE)),
+    ("计算方法", re.compile(r"^#{1,6}\s*[0-9.]*\s*计算方法", re.MULTILINE)),
+    ("结果与讨论", re.compile(r"^#{1,6}\s*[0-9.]*\s*结果.{0,2}讨论", re.MULTILINE)),
+    ("结论", re.compile(r"^#{1,6}\s*[0-9.]*\s*(结论|总结)", re.MULTILINE)),
+]
+
+# 历次验收实证雷区：模型反复踩的"无据外推"表述，命中即报。
+# 这类表述通常不是「数值+单位」格式（ppm/数量级）或可被差值规则碰巧放行
+# （如 −0.8 eV＝−0.92−(−0.12)），故在数值白名单之外单独确定性拦截。
+FORBIDDEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("检测限单位 ppm", re.compile(r"ppm", re.IGNORECASE)),
+    ("检测限单位 ppb", re.compile(r"ppb", re.IGNORECASE)),
+    ("检测限表述", re.compile(r"检测限")),
+    ("选择性系数", re.compile(r"选择性系数")),
+    ("经验阈值", re.compile(r"经验阈值")),
+    ("特征长度", re.compile(r"特征长度")),
+    ("不确定度/误差", re.compile(r"不确定度|误差范围|±\s*\d")),
+    ("数量级表述", re.compile(r"数量级")),
+]
+
+
+def check_structure(report_text: str) -> list[str]:
+    """检查论文结构完整性：标题 + 摘要/引言/计算方法/结果与讨论/结论。"""
+    problems: list[str] = []
+    # 标题行允许出现在全文任意位置（兼容历史存档的外层 ```markdown 围栏与 BOM）
+    if not re.search(r"^#\s+\S+", report_text, re.MULTILINE):
+        problems.append("[结构缺失] 缺少标题（未找到 '# 标题' 格式行，疑似模型输出了分析而非论文）")
+    for name, pat in REQUIRED_SECTIONS:
+        if not pat.search(report_text):
+            problems.append(f"[结构缺失] 缺少必要小节：{name}（终稿不是完整论文）")
+    return problems
+
+
+def check_forbidden(report_text: str) -> list[str]:
+    """检查禁用表述黑名单，返回问题清单。"""
+    problems: list[str] = []
+    for label, pat in FORBIDDEN_PATTERNS:
+        for m in pat.finditer(report_text):
+            lineno = report_text.count("\n", 0, m.start()) + 1
+            line = report_text.splitlines()[lineno - 1].strip()[:80]
+            problems.append(f"[禁用表述] {label} — 第{lineno}行: {line}")
+    return problems
+
+
 def validate(report_path: Path, data_path: Path) -> tuple[bool, list[str]]:
     """校验报告。返回 (是否通过, 问题清单)。"""
     whitelist = build_whitelist(data_path.read_text(encoding="utf-8"))
     report_text = report_path.read_text(encoding="utf-8")
     problems: list[str] = []
 
+    # 防线 0.5：结构完整性（防废稿假绿）
+    problems.extend(check_structure(report_text))
+    # 防线 0.75：禁用表述黑名单（防无据外推漏网）
+    problems.extend(check_forbidden(report_text))
+
+    # 防线 1：数值白名单
     for unit, val, lineno, line in extract_report_numbers(report_text):
         unit_vals = whitelist.get(unit)
         if unit_vals is None:
@@ -192,6 +250,13 @@ def validate(report_path: Path, data_path: Path) -> tuple[bool, list[str]]:
 
 
 def main() -> int:
+    # 控制台编码容错：问题文本可能含模型输出的 emoji 等 GBK 不支持的字符，
+    # 打印时替换为占位符而不是抛 UnicodeEncodeError（文件写入不受影响）。
+    try:
+        sys.stdout.reconfigure(errors="replace")
+        sys.stderr.reconfigure(errors="replace")
+    except Exception:
+        pass
     report = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_REPORT
     data = Path(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_DATA
     if not report.is_file():

@@ -69,6 +69,7 @@ class PaperState(BaseModel):
     channel: str = ""            # 输入通道 A（手填）/ B（自动解析）
     round_no: int = 0            # 已执行的对抗轮数
     failed_verdicts: int = 0     # 最后一轮成立（未消解）的裁决数
+    verdict_parse_error: bool = False  # 最后一轮裁决书是否解析失败（须人工复核）
     adversarial_flag: str = ""   # 留档后缀："" / "_未通过对抗"
 
 
@@ -104,27 +105,32 @@ def strip_wrapping_fences() -> None:
         print("[清洗] 已剥离终稿外层 markdown 围栏")
 
 
-def parse_verdicts() -> int:
-    """解析裁决书 JSON，返回成立裁决数。解析失败按 0 处理并留原始文件供人工审。"""
+def parse_verdicts() -> tuple[int, bool]:
+    """解析裁决书 JSON，返回 (成立裁决数, 是否解析失败)。
+
+    解析失败/文件缺失按 0 条成立处理并保留原始文件供人工审，
+    同时返回失败标记——由 Flow 显式标记留档，禁止静默放行（2026-08-22 实测：
+    DeepSeek 输出非严格 JSON 曾被当成"0 条成立"吞掉，导致假绿）。
+    """
     if not VERDICT_FILE.is_file():
-        print("[对抗] 裁决书缺失，按无成立裁决处理")
-        return 0
+        print("[对抗] 裁决书缺失，按无成立裁决处理（需人工复核本轮对抗）")
+        return 0, True
     import json
     raw = VERDICT_FILE.read_text(encoding="utf-8")
     # 鲁棒剥离：markdown 围栏 / 前后杂文
     start, end = raw.find("{"), raw.rfind("}")
     if start < 0 or end <= start:
-        print("[对抗] 裁决书不是 JSON，按无成立裁决处理（原文已留档）")
-        return 0
+        print("[对抗] 裁决书不是 JSON，按无成立裁决处理（原文已留档，需人工复核）")
+        return 0, True
     try:
         data = json.loads(raw[start:end + 1])
     except json.JSONDecodeError as e:
-        print(f"[对抗] 裁决书 JSON 解析失败（{e}），按无成立裁决处理")
-        return 0
+        print(f"[对抗] 裁决书 JSON 解析失败（{e}），按无成立裁决处理（需人工复核）")
+        return 0, True
     verdicts = data.get("裁决", [])
     upheld = [v for v in verdicts if v.get("结论") == "成立"]
     print(f"[对抗] 裁决 {len(verdicts)} 条，成立 {len(upheld)} 条；{data.get('轮次总结', '')}")
-    return len(upheld)
+    return len(upheld), False
 
 
 class PaperFlow(Flow[PaperState]):
@@ -153,7 +159,7 @@ class PaperFlow(Flow[PaperState]):
         crew, inputs = load_crew(BASE_DIR / "review_crew.jsonc")
         crew.kickoff(inputs=inputs)
         self.state.round_no += 1
-        self.state.failed_verdicts = parse_verdicts()
+        self.state.failed_verdicts, self.state.verdict_parse_error = parse_verdicts()
         return self.state.failed_verdicts
 
     @listen(writing_crew)
@@ -202,12 +208,15 @@ class PaperFlow(Flow[PaperState]):
         if figures and final_md.is_file():
             md2pdf.insert_figures(final_md, figures)
 
+        # 对抗可靠性标记：裁决书解析失败 → 该轮对抗结果未生效，须人工复核
+        parse_flag = "_裁决解析失败" if self.state.verdict_parse_error else ""
+
         # 防线一：数值白名单校验
         suffix = ""
         if final_md.is_file():
             ok, problems = validate_report.validate(final_md, DATA_FILE)
             suffix = "" if ok else "_未通过校验"
-            archive = OUTPUT_DIR / f"论文_终稿_{stamp}{suffix}{self.state.adversarial_flag}.md"
+            archive = OUTPUT_DIR / f"论文_终稿_{stamp}{suffix}{parse_flag}{self.state.adversarial_flag}.md"
             archive.write_text(final_md.read_text(encoding="utf-8"), encoding="utf-8")
             print(f"[留档] {archive.name}")
             draft = OUTPUT_DIR / "论文_初稿.md"
@@ -220,7 +229,7 @@ class PaperFlow(Flow[PaperState]):
             else:
                 lines = [
                     f"运行时间戳：{stamp}",
-                    f"发现 {len(problems)} 个白名单外数值（数据文件中不存在且无法推导）：",
+                    f"发现 {len(problems)} 个校验问题（白名单外数值 / 结构缺失 / 禁用表述）：",
                     "",
                     *problems,
                     "",
@@ -232,7 +241,7 @@ class PaperFlow(Flow[PaperState]):
 
         # 转 PDF：留档版 + 最新版
         if final_md.is_file():
-            archived_pdf = OUTPUT_DIR / f"论文_终稿_{stamp}{suffix}{self.state.adversarial_flag}.pdf"
+            archived_pdf = OUTPUT_DIR / f"论文_终稿_{stamp}{suffix}{parse_flag}{self.state.adversarial_flag}.pdf"
             if md2pdf.md_to_pdf(final_md, archived_pdf):
                 import shutil
                 shutil.copyfile(archived_pdf, OUTPUT_DIR / "论文_终稿.pdf")
@@ -240,7 +249,8 @@ class PaperFlow(Flow[PaperState]):
 
         print("\n========== Flow 运行结束 ==========")
         print(f"输入通道 {self.state.channel}｜对抗 {self.state.round_no} 轮｜"
-              f"未消解裁决 {self.state.failed_verdicts} 条｜校验{'通过' if suffix == '' else '未通过'}")
+              f"未消解裁决 {self.state.failed_verdicts} 条｜校验{'通过' if suffix == '' else '未通过'}"
+              f"{'｜裁决书解析失败，本轮对抗结果未生效（已留档待人工复核）' if self.state.verdict_parse_error else ''}")
         return stamp
 
 
